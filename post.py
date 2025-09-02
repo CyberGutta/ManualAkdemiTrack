@@ -1,4 +1,25 @@
 import requests
+import json
+import os
+
+# Function to load cookies from cookies.json
+def load_cookies(cookies_file="cookies.json"):
+    try:
+        if not os.path.exists(cookies_file):
+            raise FileNotFoundError(f"Cookie file '{cookies_file}' not found")
+        
+        with open(cookies_file, 'r') as f:
+            cookies_data = json.load(f)
+        
+        # Extract cookie values from the JSON structure
+        cookies = {}
+        for cookie in cookies_data:
+            cookies[cookie['name']] = cookie['value']
+        
+        return cookies
+    except Exception as e:
+        print(f"Error loading cookies: {e}")
+        return None
 
 # Function to get public IP
 def get_public_ip():
@@ -9,6 +30,25 @@ def get_public_ip():
         print(f"Error getting IP: {e}")
         return "0.0.0.0"  # Fallback
 
+# Load cookies from file
+cookies = load_cookies()
+if not cookies:
+    print("Failed to load cookies. Exiting.")
+    exit(1)
+
+# Extract required cookie values
+jsessionid = cookies.get('JSESSIONID')
+wl_authcookie = cookies.get('_WL_AUTHCOOKIE_JSESSIONID')
+oracle_bmc_route = cookies.get('X-Oracle-BMC-LBS-Route')
+
+# Validate that required cookies are present
+if not all([jsessionid, wl_authcookie, oracle_bmc_route]):
+    print("Missing required cookies in cookies.json file")
+    print(f"JSESSIONID: {'✓' if jsessionid else '✗'}")
+    print(f"_WL_AUTHCOOKIE_JSESSIONID: {'✓' if wl_authcookie else '✗'}")
+    print(f"X-Oracle-BMC-LBS-Route: {'✓' if oracle_bmc_route else '✗'}")
+    exit(1)
+
 # Data from the provided item (assuming one item; extend for multiple if needed)
 item = {
     "Id": 1,
@@ -18,12 +58,12 @@ item = {
     "KlId": "A",
     "KNavn": "STU",
     "GruppeNr": "$",
-    "Dato": "20250825",
-    "Timenr": 21578207,
+    "Dato": "20250903",
+    "Timenr": 21609421,
     "StartKl": "0900",
     "SluttKl": "0945",
     "UndervisningPaagaar": 1,
-    "Typefravaer": None,
+    "Typefravaer": "",
     "ElevForerTilstedevaerelse": 1,
     "Kollisjon": 1,
     "TidsromTilstedevaerelse": "09:00 - 09:15"
@@ -54,16 +94,13 @@ payload = {
     "parameters": parameters
 }
 
-# IMPORTANT: Replace with your actual JSESSIONID and other session-specific values from your browser's dev tools
-jsessionid = "VKXLQQhgAnLoHYo-t9jjGZEnuXK95QS-CQIZQJHZ2AsY1qazL7DR!854864944!NONE!1755756910843"
-wl_authcookie = "SHWlp8NbyV45wfThqoUt"  # Replace if different
-oracle_bmc_route = "5b77d0961fadf1e852bfbb189bcc11ebc314be12"  # Replace if different
-
+# Build URL with JSESSIONID (extract the part before the first '!' if present)
+jsessionid_clean = jsessionid.split('!')[0] if '!' in jsessionid else jsessionid
 url = f"https://iskole.net/iskole_elev/rest/v0/VoTimeplan_elev_oppmote;jsessionid={jsessionid}"
 
 headers = {
     "Host": "iskole.net",
-    "Cookie": f"X-Oracle-BMC-LBS-Route={oracle_bmc_route}; JSESSIONID={jsessionid.split('!')[0]}; _WL_AUTHCOOKIE_JSESSIONID={wl_authcookie}",
+    "Cookie": f"X-Oracle-BMC-LBS-Route={oracle_bmc_route}; JSESSIONID={jsessionid_clean}; _WL_AUTHCOOKIE_JSESSIONID={wl_authcookie}",
     "Sec-Ch-Ua-Platform": "\"macOS\"",
     "Accept-Language": "nb-NO,nb;q=0.9",
     "Sec-Ch-Ua": "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
@@ -83,6 +120,7 @@ headers = {
 }
 
 # Send the POST request
+print("Sending request with loaded cookies...")
 response = requests.post(url, json=payload, headers=headers)
 
 # Print the response
