@@ -213,4 +213,3 @@ This tool is designed to assist students with legitimate attendance registration
 ---
 
 **Version**: 1.0.0  
-**Last Updated**: January 2025
